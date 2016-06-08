@@ -187,6 +187,7 @@ void handle_execve(Process *process) {
 			printf("[%d] execve(%s, {", process->pid, process->executable.c_str());
 
 			int i = 0;
+			process->args.clear();
 			while(1) {
 				long addr = ptrace(PTRACE_PEEKDATA, process->pid, regs.rsi + 8 * i, NULL);
 				if(addr == 0) break;
