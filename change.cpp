@@ -21,14 +21,13 @@ typedef uint64_t word_t;
 
 typedef struct _Process {
 	int pid;
-	char cmd[5000];
+	std::string executable;
+	std::vector<std::string> args;
 	std::vector<_Process*> childs;
 	bool syscall;
 
 	_Process(int pid) {
 		this->pid = pid;
-		this->cmd[0] = 0;
-		this->childs.clear();
 		this->syscall = 0;
 	}
 } Process;
@@ -50,7 +49,7 @@ Process* find(int pid, Process *proc) {
 
 void generate(int out, Process *p) {
 	char str[1024];
-	sprintf(str, "%d [label=\"%s\"]\n", p->pid, p->cmd);
+	sprintf(str, "%d [label=\"%s\"]\n", p->pid, p->executable.c_str());
 	write(out, str, strlen(str));
 
 	for(Process* c: p->childs) {
@@ -61,6 +60,9 @@ void generate(int out, Process *p) {
 }
 
 char str[10000];
+
+void handle_execve(Process *process);
+
 void getStr(int p, word_t addr, word_t count) {
 	str[count] = 0;
 	for(int i = 0; i < count; i++) {
@@ -160,39 +162,7 @@ int main() {
 
 			long orig_rax = ptrace(PTRACE_PEEKUSER, pid, 8 * ORIG_RAX, NULL);
 			if(orig_rax == SYS_execve) {
-				struct user_regs_struct regs;
-				ptrace(PTRACE_GETREGS, pid, NULL, &regs);
-				if(process->syscall == 0) {
-					if(regs.rdi > 0) {
-						process->syscall = 1;
-						getString(pid, regs.rdi);
-
-						process->cmd[0] = 0;
-						strcat(process->cmd, str);
-						strcat(process->cmd, " ");
-
-						printf("[%d] execve(%s, {", pid, str);
-
-						int i = 0;
-						while(1) {
-							long addr = ptrace(PTRACE_PEEKDATA, pid, regs.rsi + 8*i, NULL);
-							if(addr == 0) break;
-							getString(pid, addr);
-
-							strcat(process->cmd, str);
-							strcat(process->cmd, " ");
-
-							printf("%s, ", str);
-							i++;
-						}
-
-						printf("})\n");
-					}
-				} else {
-					process->syscall = 0;
-					long rax = ptrace(PTRACE_PEEKUSER, pid, 8 * RAX, NULL);
-					printf("[%d] ... returned %ld %s\n", pid, rax, strerror(-regs.rax));
-				}
+				handle_execve(process);
 			} else {
 				//printf("[%d] syscall %d %s\n", p, orig_rax, syscall_name[orig_rax]);
 			}
@@ -202,4 +172,37 @@ int main() {
 	}
 
 	return 0;
+}
+
+void handle_execve(Process *process) {
+	struct user_regs_struct regs;
+	ptrace(PTRACE_GETREGS, process->pid, NULL, &regs);
+	if(process->syscall == 0) {
+		if(regs.rdi > 0) {
+			process->syscall = 1;
+			getString(process->pid, regs.rdi);
+
+			process->executable = str;
+
+			printf("[%d] execve(%s, {", process->pid, process->executable.c_str());
+
+			int i = 0;
+			while(1) {
+				long addr = ptrace(PTRACE_PEEKDATA, process->pid, regs.rsi + 8 * i, NULL);
+				if(addr == 0) break;
+				getString(process->pid, addr);
+
+				process->args.push_back(str);
+
+				printf("%s, ", process->args.back().c_str());
+				i++;
+			}
+
+			printf("})\n");
+		}
+	} else {
+		process->syscall = 0;
+		long rax = ptrace(PTRACE_PEEKUSER, process->pid, 8 * RAX, NULL);
+		printf("[%d] ... returned %ld %s\n", process->pid, rax, strerror(-regs.rax));
+	}
 }
