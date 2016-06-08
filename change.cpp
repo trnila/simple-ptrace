@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <unordered_map>
 //#include "syscall_names.h"
 
 typedef uint64_t word_t;
@@ -105,10 +106,18 @@ int main() {
 		printf("Main tracked process is %d\n", pid);
 
 		Process* mainProcess = new Process(pid);
+		std::unordered_map<int, Process*> processes;
+
 		int i = 0;
 		bool created = false;
 
 		while((p = wait(&s)) > 0) {
+			Process *process = processes[p];
+			if(!process) {
+				process = new Process(p);
+				processes[p] = process;
+			}
+
 			// stop and trace all childs of traced process
 			if(!attached && p == pid) {
 				if(ptrace(PTRACE_SETOPTIONS, pid, NULL,  PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK) !=0) {
@@ -118,7 +127,7 @@ int main() {
 				printf("installed\n");
 				attached = 1;
 			}
-			
+
 			// new process is forked
 			bool forked = s>>8 == (SIGTRAP | (PTRACE_EVENT_FORK<<8));
 			bool vforked = s>>8 == (SIGTRAP | (PTRACE_EVENT_VFORK<<8));
@@ -129,8 +138,11 @@ int main() {
 
 				Process* parent = find(p, mainProcess);
 
-				Process* newP = new Process(newpid);
-				parent->childs.push_back(newP);
+				Process* child = processes[newpid];
+				if(!child) {
+					child = new Process(newpid);
+				}
+				parent->childs.push_back(child);
 
 				char *msg;
 				static char *msgs[] = {"forked", "vforked", "cloned"};
@@ -149,13 +161,6 @@ int main() {
 				printf("[%d] %s %d\n", p, msg, newpid);
 				created = true;
 			}
-
-			Process *process = find(p, mainProcess);
-			if(!process) {
-				printf("no such process? %d\n", p);
-				exit(1);
-			}
-
 
 			if(WIFEXITED(s)) {
 				printf("[%d] exit\n", p);
