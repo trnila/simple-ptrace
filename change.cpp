@@ -109,7 +109,7 @@ int main() {
 		Process* mainProcess = new Process(mainPid);
 		std::unordered_map<int, Process*> processes;
 
-		while((pid = wait(&status)) > 0) {
+		while((pid = waitpid(-1, &status, __WALL)) > 0) {
 			Process *process = processes[pid];
 			if(!process) {
 				process = new Process(pid);
