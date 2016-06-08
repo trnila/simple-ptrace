@@ -88,8 +88,8 @@ void getString(int p, word_t addr) {
 
 
 int main() {
-	int pid = fork();
-	if(pid == 0) {
+	int mainPid = fork();
+	if(mainPid == 0) {
 		if(ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) {printf("FAILED!");exit(1);}
 
 		int newOut = open("/dev/null", O_WRONLY);
@@ -98,54 +98,48 @@ int main() {
 
 		execl("/usr/bin/make", "make", "clean", "all", NULL);
 	} else {
-		int lock = 0;
-		int p;
-		int s;
-
+		int pid;
+		int status;
 		int attached = 0;
-		printf("Main tracked process is %d\n", pid);
 
-		Process* mainProcess = new Process(pid);
+		printf("Main tracked process is %d\n", mainPid);
+
+		Process* mainProcess = new Process(mainPid);
 		std::unordered_map<int, Process*> processes;
 
-		int i = 0;
-		bool created = false;
-
-		while((p = wait(&s)) > 0) {
-			Process *process = processes[p];
+		while((pid = wait(&status)) > 0) {
+			Process *process = processes[pid];
 			if(!process) {
-				process = new Process(p);
-				processes[p] = process;
+				process = new Process(pid);
+				processes[pid] = process;
 			}
 
 			// stop and trace all childs of traced process
-			if(!attached && p == pid) {
-				if(ptrace(PTRACE_SETOPTIONS, pid, NULL,  PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK) !=0) {
+			if(!attached && pid == mainPid) {
+				if(ptrace(PTRACE_SETOPTIONS, mainPid, NULL,  PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK) !=0) {
 					perror("setopts");
 					exit(1);
 				}
-				printf("installed\n");
 				attached = 1;
 			}
 
-			// new process is forked
-			bool forked = s>>8 == (SIGTRAP | (PTRACE_EVENT_FORK<<8));
-			bool vforked = s>>8 == (SIGTRAP | (PTRACE_EVENT_VFORK<<8));
-			bool cloned =  s>>8 == (SIGTRAP | (PTRACE_EVENT_CLONE<<8));
+			// new process is created
+			bool forked = status>>8 == (SIGTRAP | (PTRACE_EVENT_FORK<<8));
+			bool vforked = status>>8 == (SIGTRAP | (PTRACE_EVENT_VFORK<<8));
+			bool cloned =  status>>8 == (SIGTRAP | (PTRACE_EVENT_CLONE<<8));
 			if(forked || vforked || cloned) {
-				int newpid;
-				ptrace(PTRACE_GETEVENTMSG, p, NULL, &newpid);
+				int childPid;
+				ptrace(PTRACE_GETEVENTMSG, pid, NULL, &childPid);
 
-				Process* parent = find(p, mainProcess);
-
-				Process* child = processes[newpid];
+				Process* parent = find(pid, mainProcess);
+				Process* child = processes[childPid];
 				if(!child) {
-					child = new Process(newpid);
+					child = new Process(childPid);
 				}
 				parent->childs.push_back(child);
 
-				char *msg;
-				static char *msgs[] = {"forked", "vforked", "cloned"};
+				const char *msg;
+				static const char *msgs[] = {"forked", "vforked", "cloned"};
 
 				if(forked) {
 					msg = msgs[0];
@@ -157,37 +151,33 @@ int main() {
 					msg = msgs[2];
 				}
 
-
-				printf("[%d] %s %d\n", p, msg, newpid);
-				created = true;
+				printf("[%d] %s %d\n", pid, msg, childPid);
 			}
 
-			if(WIFEXITED(s)) {
-				printf("[%d] exit\n", p);
+			if(WIFEXITED(status)) {
+				printf("[%d] exit\n", pid);
 			}
 
-
-			long orig_rax = ptrace(PTRACE_PEEKUSER, p, 8 * ORIG_RAX, NULL);
-
+			long orig_rax = ptrace(PTRACE_PEEKUSER, pid, 8 * ORIG_RAX, NULL);
 			if(orig_rax == SYS_execve) {
 				struct user_regs_struct regs;
-				ptrace(PTRACE_GETREGS, p, NULL, &regs);
+				ptrace(PTRACE_GETREGS, pid, NULL, &regs);
 				if(process->syscall == 0) {
 					if(regs.rdi > 0) {
 						process->syscall = 1;
-						getString(p, regs.rdi);
+						getString(pid, regs.rdi);
 
 						process->cmd[0] = 0;
 						strcat(process->cmd, str);
 						strcat(process->cmd, " ");
 
-						printf("[%d] execve(%s, {", p, str);
+						printf("[%d] execve(%s, {", pid, str);
 
 						int i = 0;
 						while(1) {
-							long addr = ptrace(PTRACE_PEEKDATA, p, regs.rsi + 8*i, NULL);
+							long addr = ptrace(PTRACE_PEEKDATA, pid, regs.rsi + 8*i, NULL);
 							if(addr == 0) break;
-							getString(p, addr);
+							getString(pid, addr);
 
 							strcat(process->cmd, str);
 							strcat(process->cmd, " ");
@@ -197,19 +187,17 @@ int main() {
 						}
 
 						printf("})\n");
-						created = true;
 					}
 				} else {
 					process->syscall = 0;
-					long rax = ptrace(PTRACE_PEEKUSER, p, 8 * RAX, NULL);
-					printf("[%d] ... returned %ld %s\n", p, rax, strerror(-regs.rax));
+					long rax = ptrace(PTRACE_PEEKUSER, pid, 8 * RAX, NULL);
+					printf("[%d] ... returned %ld %s\n", pid, rax, strerror(-regs.rax));
 				}
 			} else {
 				//printf("[%d] syscall %d %s\n", p, orig_rax, syscall_name[orig_rax]);
 			}
 
-			ptrace(PTRACE_SYSCALL, p, 0, 0);
-			created = false;
+			ptrace(PTRACE_SYSCALL, pid, 0, 0);
 		}
 	}
 
