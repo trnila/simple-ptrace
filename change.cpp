@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <fcntl.h>
+//#include "syscall_names.h"
 
 typedef uint64_t word_t;
 
@@ -94,7 +95,7 @@ int main() {
 		dup2(newOut, 1);
 		dup2(newOut, 2);
 
-		execl("/usr/bin/make", "make", "-C", "test", "clean", "all", NULL);
+		execl("/usr/bin/make", "make", "clean", "all", NULL);
 	} else {
 		int lock = 0;
 		int p;
@@ -107,8 +108,6 @@ int main() {
 		int i = 0;
 		bool created = false;
 
-
-		// TODO: vfork aj clone
 		while((p = wait(&s)) > 0) {
 			// stop and trace all childs of traced process
 			if(!attached && p == pid) {
@@ -119,8 +118,7 @@ int main() {
 				printf("installed\n");
 				attached = 1;
 			}
-
-			// TODO: clone, etc
+			
 			// new process is forked
 			bool forked = s>>8 == (SIGTRAP | (PTRACE_EVENT_FORK<<8));
 			bool vforked = s>>8 == (SIGTRAP | (PTRACE_EVENT_VFORK<<8));
@@ -167,17 +165,13 @@ int main() {
 			long orig_rax = ptrace(PTRACE_PEEKUSER, p, 8 * ORIG_RAX, NULL);
 
 			if(orig_rax == SYS_execve) {
-				if(process->syscall == 0) {
-					process->syscall = 1;
 				struct user_regs_struct regs;
 				ptrace(PTRACE_GETREGS, p, NULL, &regs);
-				//perror("errno");
+				if(process->syscall == 0) {
+					if(regs.rdi > 0) {
+						process->syscall = 1;
+						getString(p, regs.rdi);
 
-				if(regs.rdi > 0) {
-					getString(p, regs.rdi);
-
-					Process* process = find(p, mainProcess);
-					if(process) {
 						process->cmd[0] = 0;
 						strcat(process->cmd, str);
 						strcat(process->cmd, " ");
@@ -197,13 +191,16 @@ int main() {
 							i++;
 						}
 
-							printf("})\n");
-						}
+						printf("})\n");
 						created = true;
-					} else {
-						process->syscall = 0;
 					}
+				} else {
+					process->syscall = 0;
+					long rax = ptrace(PTRACE_PEEKUSER, p, 8 * RAX, NULL);
+					printf("[%d] ... returned %ld %s\n", p, rax, strerror(-regs.rax));
 				}
+			} else {
+				//printf("[%d] syscall %d %s\n", p, orig_rax, syscall_name[orig_rax]);
 			}
 
 			ptrace(PTRACE_SYSCALL, p, 0, 0);
