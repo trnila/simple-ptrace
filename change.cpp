@@ -27,10 +27,20 @@ typedef struct _Process {
 	std::vector<std::string> args;
 	std::vector<_Process*> childs;
 	bool syscall;
+	int start;
+	int stop;
+	_Process *parent;
+	int stdin, stdout;
 
 	_Process(int pid) {
 		this->pid = pid;
 		this->syscall = 0;
+
+		char filename[128];
+		sprintf(filename, "out/%d.in", pid);
+		stdin = open(filename, O_WRONLY | O_CREAT, 0600);
+		sprintf(filename, "out/%d.out", pid);
+		stdout = open(filename, O_WRONLY | O_CREAT, 0600);
 	}
 } Process;
 
@@ -46,7 +56,7 @@ void generate(int out, Process *p) {
 	}
 }
 
-char str[10000];
+char str[100000];
 
 void handle_execve(Register &reg, Process *process, int pargc, char **pargv, int start);
 
@@ -55,7 +65,7 @@ void getStr(int p, word_t addr, word_t count) {
 	for(int i = 0; i < count; i++) {
 		str[i] = ptrace(PTRACE_PEEKDATA, p, addr + i, NULL);
 		if(str[i] == '\n') {
-			str[i] = '#';
+	//		str[i] = '#';
 		}
 	}
 }
@@ -110,11 +120,11 @@ int main(int argc, char **argv) {
 		char** args = new char*[stop + 1];
 		args[0] = basename(argv[1]);
 		args[stop] = 0;
-printf("%s>\n", args[0]);
+
 		for(int i = 2; i < stop; i++) {
 			args[i - 1] = argv[i];
-		}		
-		printf("%s>\n", args[0]);
+		}
+
 		execv(argv[1], args);
 		perror("execv");
 		exit(1);
@@ -122,6 +132,7 @@ printf("%s>\n", args[0]);
 		int pid;
 		int status;
 		int attached = 0;
+		int time = 0;
 
 		LOG("Main tracked process is %d\n", mainPid);
 
@@ -131,6 +142,8 @@ printf("%s>\n", args[0]);
 			Process *process = processes[pid];
 			if (!process) {
 				process = new Process(pid);
+				process->parent = nullptr;
+				process->start = time++;
 				processes[pid] = process;
 			}
 
@@ -156,6 +169,7 @@ printf("%s>\n", args[0]);
 					if (!child) {
 						child = new Process(childPid);
 					}
+					child->start = time++;
 					parent->childs.push_back(child);
 
 					const char *msg;
@@ -174,12 +188,41 @@ printf("%s>\n", args[0]);
 					LOG("[%d] %s %d\n", pid, msg, childPid);
 				} else if(WIFEXITED(status)) {
 					LOG("[%d] exit\n", pid);
+					process->stop = time++;
 				} else {
 					Register reg;
 					loadRegisters(pid, reg);
 
 					if (reg.syscall == SYS_execve) {
 						handle_execve(reg, process, argc, argv, stop + 1);
+					} else if(reg.syscall == SYS_write) {
+						if(process->syscall == 0) {
+							process->syscall = 1;
+
+							if(reg.arguments[0] == 1) {
+								getStr(process->pid, reg.arguments[1], reg.arguments[2]);
+								printf("[%d] write(%d, %s, %d)\n", process->pid, reg.arguments[0], str, reg.arguments[2]);
+
+								write(process->stdout, str, reg.arguments[2]);
+							}
+						} else {
+							process->syscall = 0;
+						}
+					} else if(reg.syscall == SYS_read) {
+						struct user_regs_struct regs;
+						ptrace(PTRACE_GETREGS, process->pid, NULL, &regs);
+						if(process->syscall == 0) {
+							process->syscall = 1;
+						} else {
+							process->syscall = 0;
+
+							if(regs.rdi == 0) {
+								getStr(process->pid, reg.arguments[1], reg.arguments[2]);
+								printf("[%d] read(%d, %s, %d)\n", process->pid, reg.arguments[0], str, reg.arguments[2]);
+
+								write(process->stdin, str, reg.arguments[2]);
+							}
+						}
 					} else {
 						//printf("[%d] syscall %d\n", process->pid, reg.syscall);
 					}
@@ -187,6 +230,29 @@ printf("%s>\n", args[0]);
 			}
 			ptrace(PTRACE_SYSCALL, pid, 0, 0);
 		}
+
+		FILE* out = fopen("data.js", "w+");
+		fprintf(out, "var items = [\n");
+		for(auto i: processes) {
+			Process *p = i.second;
+			fprintf(out, "\t{id: %d, content: \"%s\", start: %d, end: %d, group: %d, args: [",  p->pid, p->executable.c_str(), p->start, p->stop, p->parent ? p->parent->pid : 0);
+
+			for(std::string arg: p->args) {
+				std::string str(arg);
+
+				std::string to("\\\"");
+				size_t start_pos = 0;
+    			while((start_pos = str.find("\"", start_pos)) != std::string::npos) {
+        			str.replace(start_pos, 1, to);
+        			start_pos += to.length();
+    			}
+
+				fprintf(out, "\"%s\", ", str.c_str());
+			}
+			fprintf(out, "]},\n");
+		}
+		fprintf(out, "];\n");
+		fclose(out);
 	}
 
 	return 0;

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+Created using JS Bin
+http://jsbin.com
+
+Copyright (c) 2016 by trnila (http://jsbin.com/mihari/1/edit)
+
+Released under the MIT license: http://jsbin.mit-license.org
+-->
+<meta name="robots" content="noindex">
+<html>
+<head>
+<script src="https://code.jquery.com/jquery-3.0.0-rc1.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <link rel="stylesheet" href="http://visjs.org/dist/vis.css">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" integrity="sha384-1q8mTJOASx8j1Au+a5WDVnPi2lkFfwwEAa8hDDdjZlpLegxhjVME1fgjWPGmkzs7" crossorigin="anonymous">
+
+  <title>JS Bin</title>
+</head>
+<body>
+  <div id="visualization"></div>
+  <div id="output">
+    <h1 id="executable"></h1>
+    <div id="args"></div>
+
+    <div class="row">
+      <div class="col-sm-6">
+        <h2>stdin</h2>
+        <iframe id="stdin" width="100%" height="200px" style="border: 0px"></iframe>
+      </div>
+
+      <div class="col-sm-6">
+        <h2>stdout</h2>
+        <iframe id="stdout" width="100%" height="200px" style="border: 0px"></iframe>
+      </div>
+    </div>
+
+  </div>
+  <script src="http://visjs.org/dist/vis.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.0.0-rc1/jquery.min.js"></script>
+  <script src="data.js"></script>
+<script id="jsbin-javascript">
+
+// DOM element where the Timeline will be attached
+  var container = document.getElementById('visualization');
+
+  // Create a DataSet (allows two way data-binding)
+  var items = new vis.DataSet(items);
+
+  // Configuration for the Timeline
+  var options = {
+  };
+
+  // Create a Timeline
+  var timeline = new vis.Timeline(container, items, options);
+
+var output = document.getElementById("output");
+var stdin = document.getElementById("stdin");
+var stdout = document.getElementById("stdout");
+var executable = document.getElementById("executable");
+var args = document.getElementById("args");
+timeline.on('select', function (properties) {
+  var item = items.get(properties.items[0]);
+
+  console.log(item.args);
+
+  stdin.src = "out/" + item.id + ".in";
+  stdout.src = "out/" + item.id + ".out";
+  executable.innerText = item.content;
+  args.innerText = item.args.join(" ");
+
+});
+
+</script>
+</body>
+</html>
