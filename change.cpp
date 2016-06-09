@@ -14,102 +14,10 @@
 #include <stdint.h>
 #include <fcntl.h>
 #include <unordered_map>
+#include "arch.h"
 
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 //#define LOG(...)
-
-#if __x86_64__
-	typedef uint64_t word_t;
-	typedef struct user_regs_struct NativeRegs;
-#elif __i386__
-	typedef int32_t word_t;
-	typedef struct user_regs_struct NativeRegs;
-#elif __arm__
-	typedef int32_t word_t;
-	typedef struct user_regs NativeRegs;
-#endif
-
-typedef struct {
-	word_t syscall;
-	word_t arguments[6];
-	word_t ret;
-	word_t stack;
-} Register;
-
-void mapRegisters(const NativeRegs &, Register &reg);
-void mapRegisters(const Register reg, NativeRegs &orig);
-
-#if __x86_64__
-void mapRegisters(const NativeRegs &orig, Register &reg) {
-	reg.syscall = orig.orig_rax;
-	reg.arguments[0] = orig.rdi;
-	reg.arguments[1] = orig.rsi;
-	reg.arguments[2] = orig.rdx;
-	reg.arguments[3] = orig.r10;
-	reg.arguments[4] = orig.r8;
-	reg.arguments[5] = orig.r9;
-	reg.ret = orig.rax;
-	reg.stack = orig.rsp;
-}
-
-void mapRegisters(const Register reg, NativeRegs &orig) {
-	orig.orig_rax = reg.syscall;
-	orig.rdi = reg.arguments[0];
-	orig.rsi = reg.arguments[1];
-	orig.rdx = reg.arguments[2];
-	orig.r10 = reg.arguments[3];
-	orig.r8 = reg.arguments[4];
-	orig.r9 = reg.arguments[5];
-	orig.rax = reg.ret;
-	orig.rsp = reg.stack;
-}
-#elif __i386__
-void mapRegisters(const NativeRegs &orig, Register &reg) {
-	reg.syscall = orig.orig_eax;
-	reg.arguments[0] = orig.ebx;
-	reg.arguments[1] = orig.ecx;
-	reg.arguments[2] = orig.edx;
-	reg.arguments[3] = orig.esi;
-	reg.arguments[4] = orig.edi;
-	reg.arguments[5] = orig.ebp;
-	reg.ret = orig.eax;
-	reg.stack = orig.esp;
-}
-
-void mapRegisters(const Register reg, NativeRegs &orig) {
-	orig.orig_eax = reg.syscall;
-	orig.ebx = reg.arguments[0];
-	orig.ecx = reg.arguments[1];
-	orig.edx = reg.arguments[2];
-	orig.esi = reg.arguments[3];
-	orig.edi = reg.arguments[4];
-	orig.ebp = reg.arguments[5];
-	orig.eax = reg.ret;
-	orig.esp = reg.stack;
-}
-#elif __arm__
-void mapRegisters(const NativeRegs &orig, Register &reg) {
-	reg.syscall = orig.uregs[7];
-	for(int i = 0; i < 6; i++) {
-		reg.arguments[i] = orig.uregs[i];
-	}
-
-	reg.ret = orig.uregs[0];
-	reg.stack = orig.uregs[13];
-}
-
-void mapRegisters(const Register reg, NativeRegs &orig) {
-	orig.uregs[7] = reg.syscall;
-	for(int i = 0; i < 6; i++) {
-		orig.uregs[i] = reg.arguments[i];
-	}
-
-	orig.uregs[0] = reg.ret;
-	orig.uregs[13] = reg.stack;
-}
-#else
-#error unsupported architecture
-#endif
 
 typedef struct _Process {
 	int pid;
@@ -250,10 +158,8 @@ int main(int argc, char **argv) {
 				} else if(WIFEXITED(status)) {
 					LOG("[%d] exit\n", pid);
 				} else {
-					NativeRegs archRegs;
-					ptrace(PTRACE_GETREGS, process->pid, NULL, &archRegs);
 					Register reg;
-					mapRegisters(archRegs, reg);
+					loadRegisters(pid, reg);
 
 					if (reg.syscall == SYS_execve) {
 						handle_execve(reg, process, argc, argv);
@@ -274,13 +180,9 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 	char *replaceWith = pargv[2];
 
 	if(process->syscall == 0) {
-
 		if(reg.arguments[0] > 0) {
 			retry:
-			NativeRegs archRegs;
-			ptrace(PTRACE_GETREGS, process->pid, NULL, &archRegs);
-			mapRegisters(archRegs, reg);
-
+			loadRegisters(process->pid, reg);
 
 			process->syscall = 1;
 			getString(process->pid, reg.arguments[0]);
@@ -305,8 +207,6 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 			LOG("})\n");
 
 			if(process->executable == replace) {
-				NativeRegs archRegs;
-
 				const char *str = replaceWith;
 				int argc = process->args.size() + (pargc - 3) + 1;
 				char **args = new char*[argc];
@@ -333,9 +233,7 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 				putString(process->pid, reg.stack, str);
 				reg.arguments[0] = reg.stack;
 
-				mapRegisters(reg, archRegs);
-				ptrace(PTRACE_SETREGS, process->pid, NULL, &archRegs);
-				ptrace(PTRACE_POKEUSER, process->pid, sizeof(word_t) * 0, reg.arguments[0]);
+				saveRegisters(process->pid, reg);
 
 				long start = reg.stack + strlen(str)+1;
 				long end = start + sizeof(word_t) * argc;
@@ -354,9 +252,7 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 				}
 
 				reg.arguments[1] = start;
-				mapRegisters(reg, archRegs);
-				ptrace(PTRACE_SETREGS, process->pid, NULL, &archRegs);
-
+				saveRegisters(process->pid, reg);
 				goto retry;
 			}
 		}
