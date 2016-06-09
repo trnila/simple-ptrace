@@ -8,5 +8,5 @@ tests:
 	make -C tests
 
 clean:
-	rm -f change
+	rm -f change simple
 	make -C tests clean
