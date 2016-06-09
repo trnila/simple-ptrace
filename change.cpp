@@ -61,7 +61,7 @@ void generate(int out, Process *p) {
 
 char str[10000];
 
-void handle_execve(Process *process);
+void handle_execve(Process *process, int pargc, char** pargv);
 
 void getStr(int p, word_t addr, word_t count) {
 	str[count] = 0;
@@ -88,17 +88,33 @@ void getString(int p, word_t addr) {
 	}
 }
 
+long putString(int p, long addr, const char* str) {
+	//TODO: optimize all writes with words!
+	int i = -1;
+	do {
+		i++;
+		ptrace(PTRACE_POKEDATA, p, addr + i, str[i]);
+	} while(str[i] != '\0');
+	return addr + i;
+}
 
-int main() {
+
+int main(int argc, char **argv) {
+	if(argc <= 2) {
+		printf("Usage: %s /path/to/replace /path/to/replace/with arguments to add\n", argv[0]);
+		exit(1);
+	}
+
 	int mainPid = fork();
 	if(mainPid == 0) {
 		if(ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) {printf("FAILED!");exit(1);}
 
 		int newOut = open("/dev/null", O_WRONLY);
-		dup2(newOut, 1);
-		dup2(newOut, 2);
+		//dup2(newOut, 1);
+		//dup2(newOut, 2);
 
-		execl("/usr/bin/make", "make", "clean", "all", NULL);
+		//execl("/usr/bin/make", "make", "clean", "all", NULL);
+		execl("/usr/bin/make", "make", "-C", "tests/3", "clean", "all", NULL);
 	} else {
 		int pid;
 		int status;
@@ -162,7 +178,7 @@ int main() {
 
 			long orig_rax = ptrace(PTRACE_PEEKUSER, pid, 8 * ORIG_RAX, NULL);
 			if(orig_rax == SYS_execve) {
-				handle_execve(process);
+				handle_execve(process, argc, argv);
 			} else {
 				//printf("[%d] syscall %d %s\n", p, orig_rax, syscall_name[orig_rax]);
 			}
@@ -174,11 +190,15 @@ int main() {
 	return 0;
 }
 
-void handle_execve(Process *process) {
+void handle_execve(Process *process, int pargc, char** pargv) {
+	char *replace = pargv[1];
+	char *replaceWith = pargv[2];
+
 	struct user_regs_struct regs;
 	ptrace(PTRACE_GETREGS, process->pid, NULL, &regs);
 	if(process->syscall == 0) {
 		if(regs.rdi > 0) {
+			retry:
 			process->syscall = 1;
 			getString(process->pid, regs.rdi);
 
@@ -200,6 +220,57 @@ void handle_execve(Process *process) {
 			}
 
 			printf("})\n");
+
+			if(process->executable == replace) {
+				const char *str = replaceWith;
+				int argc = process->args.size() + (pargc - 3) + 1;
+				char **args = new char*[argc];
+				args[argc - 1] = nullptr;
+
+				args[0] = strrchr(replaceWith, '/');
+				if(!args[0]) {
+					args[0] = replaceWith;
+				} else {
+					args[0]++; //TODO: fix
+				}
+
+				int i;
+				for(i = 1; i < process->args.size(); i++) {
+					args[i] = (char*)process->args.at(i).c_str();
+				}
+
+				for(int j = 3; j < pargc; j++) {
+					args[i] = pargv[j];
+					i++;
+				}
+
+
+				// write new executable path
+				putString(process->pid, regs.rsp, str);
+				regs.rdi = regs.rsp;
+				ptrace(PTRACE_SETREGS, process->pid, NULL, &regs);
+
+				long start = regs.rsp + strlen(str)+1;
+				long end = start + sizeof(word_t) * argc;
+
+				// write args pointers
+				for(int i = 0; i < argc; i++) {
+					if(args[i] == nullptr) {
+						end = 0;
+					}
+
+					ptrace(PTRACE_POKEDATA, process->pid, start + sizeof(word_t) * i, end);
+
+					if(args[i]) {
+						end = 1 + putString(process->pid, end, args[i]);
+					}
+				}
+
+				regs.rsi = start;
+				ptrace(PTRACE_SETREGS, process->pid, NULL, &regs);
+
+				goto retry;
+			}
 		}
 	} else {
 		process->syscall = 0;
