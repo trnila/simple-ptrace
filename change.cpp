@@ -35,21 +35,6 @@ typedef struct _Process {
 	}
 } Process;
 
-Process* find(int pid, Process *proc) {
-	if(proc->pid == pid) {
-		return proc;
-	}
-
-	for(Process* p: proc->childs) {
-		Process* r = find(pid, p);
-		if(r) {
-			return r;
-		}
-	}
-
-	return nullptr;
-}
-
 void generate(int out, Process *p) {
 	char str[1024];
 	sprintf(str, "%d [label=\"%s\"]\n", p->pid, p->executable.c_str());
@@ -125,7 +110,6 @@ int main(int argc, char **argv) {
 
 		LOG("Main tracked process is %d\n", mainPid);
 
-		Process* mainProcess = new Process(mainPid);
 		std::unordered_map<int, Process*> processes;
 
 		while((pid = waitpid(-1, &status, __WALL)) > 0) {
@@ -152,7 +136,7 @@ int main(int argc, char **argv) {
 				int childPid;
 				ptrace(PTRACE_GETEVENTMSG, pid, NULL, &childPid);
 
-				Process* parent = find(pid, mainProcess);
+				Process* parent = processes[pid];
 				Process* child = processes[childPid];
 				if(!child) {
 					child = new Process(childPid);
