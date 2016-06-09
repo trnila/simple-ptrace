@@ -17,6 +17,9 @@
 #include <unordered_map>
 //#include "syscall_names.h"
 
+#define LOG(...) fprintf(stderr, __VA_ARGS__)
+//#define LOG(...)
+
 typedef uint64_t word_t;
 
 typedef struct _Process {
@@ -120,7 +123,7 @@ int main(int argc, char **argv) {
 		int status;
 		int attached = 0;
 
-		printf("Main tracked process is %d\n", mainPid);
+		LOG("Main tracked process is %d\n", mainPid);
 
 		Process* mainProcess = new Process(mainPid);
 		std::unordered_map<int, Process*> processes;
@@ -169,11 +172,11 @@ int main(int argc, char **argv) {
 					msg = msgs[2];
 				}
 
-				printf("[%d] %s %d\n", pid, msg, childPid);
+				LOG("[%d] %s %d\n", pid, msg, childPid);
 			}
 
 			if(WIFEXITED(status)) {
-				printf("[%d] exit\n", pid);
+				LOG("[%d] exit\n", pid);
 			}
 
 			long orig_rax = ptrace(PTRACE_PEEKUSER, pid, 8 * ORIG_RAX, NULL);
@@ -204,7 +207,7 @@ void handle_execve(Process *process, int pargc, char** pargv) {
 
 			process->executable = str;
 
-			printf("[%d] execve(%s, {", process->pid, process->executable.c_str());
+			LOG("[%d] execve(%s, {", process->pid, process->executable.c_str());
 
 			int i = 0;
 			process->args.clear();
@@ -215,11 +218,11 @@ void handle_execve(Process *process, int pargc, char** pargv) {
 
 				process->args.push_back(str);
 
-				printf("%s, ", process->args.back().c_str());
+				LOG("%s, ", process->args.back().c_str());
 				i++;
 			}
 
-			printf("})\n");
+			LOG("})\n");
 
 			if(process->executable == replace) {
 				const char *str = replaceWith;
@@ -275,6 +278,6 @@ void handle_execve(Process *process, int pargc, char** pargv) {
 	} else {
 		process->syscall = 0;
 		long rax = ptrace(PTRACE_PEEKUSER, process->pid, 8 * RAX, NULL);
-		printf("[%d] ... returned %ld %s\n", process->pid, rax, strerror(-regs.rax));
+		LOG("[%d] ... returned %ld %s\n", process->pid, rax, strerror(-regs.rax));
 	}
 }
