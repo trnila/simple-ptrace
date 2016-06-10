@@ -14,6 +14,8 @@
 #include <stdint.h>
 #include <fcntl.h>
 #include <unordered_map>
+#include <string.h>
+#include <libgen.h>
 #include "arch.h"
 
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
@@ -46,7 +48,7 @@ void generate(int out, Process *p) {
 
 char str[10000];
 
-void handle_execve(Register &reg, Process *process, int pargc, char **pargv);
+void handle_execve(Register &reg, Process *process, int pargc, char **pargv, int start);
 
 void getStr(int p, word_t addr, word_t count) {
 	str[count] = 0;
@@ -85,9 +87,16 @@ long putString(int p, long addr, const char* str) {
 
 
 int main(int argc, char **argv) {
-	if(argc <= 2) {
-		printf("Usage: %s /path/to/replace /path/to/replace/with arguments to add\n", argv[0]);
+	if(argc <= 3) {
+		printf("Usage: %s /program/to/run hisparams -- /path/to/replace /path/to/replace/with arguments to add\n", argv[0]);
 		exit(1);
+	}
+
+	int stop = 1;
+	for(int i = 2; i < argc; i++) {
+		if(strcmp(argv[i], "--") == 0) {
+			stop = i;
+		}
 	}
 
 	int mainPid = fork();
@@ -98,9 +107,17 @@ int main(int argc, char **argv) {
 		//dup2(newOut, 1);
 		//dup2(newOut, 2);
 
-		//execl("/usr/bin/make", "make", "clean", "all", NULL);
-		//execl("/usr/bin/make", "make", "-C", "tests/3", "clean", "all", NULL);
-		execl("./simple", "simple", 0);
+		char** args = new char*[stop + 1];
+		args[0] = basename(argv[1]);
+		args[stop] = 0;
+printf("%s>\n", args[0]);
+		for(int i = 2; i < stop; i++) {
+			args[i - 1] = argv[i];
+		}		
+		printf("%s>\n", args[0]);
+		execv(argv[1], args);
+		perror("execv");
+		exit(1);
 	} else {
 		int pid;
 		int status;
@@ -162,7 +179,7 @@ int main(int argc, char **argv) {
 					loadRegisters(pid, reg);
 
 					if (reg.syscall == SYS_execve) {
-						handle_execve(reg, process, argc, argv);
+						handle_execve(reg, process, argc, argv, stop + 1);
 					} else {
 						//printf("[%d] syscall %d\n", process->pid, reg.syscall);
 					}
@@ -175,9 +192,9 @@ int main(int argc, char **argv) {
 	return 0;
 }
 
-void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
-	char *replace = pargv[1];
-	char *replaceWith = pargv[2];
+void handle_execve(Register &reg, Process *process, int pargc, char **pargv, int start) {
+	char *replace = pargv[start];
+	char *replaceWith = pargv[start + 1];
 
 	if(process->syscall == 0) {
 		if(reg.arguments[0] > 0) {
@@ -208,7 +225,7 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 
 			if(process->executable == replace) {
 				const char *str = replaceWith;
-				int argc = process->args.size() + (pargc - 3) + 1;
+				int argc = process->args.size() + (pargc - start - 2) + 1;
 				char **args = new char*[argc];
 				args[argc - 1] = nullptr;
 
@@ -224,7 +241,7 @@ void handle_execve(Register &reg, Process *process, int pargc, char **pargv) {
 					args[i] = (char*)process->args.at(i).c_str();
 				}
 
-				for(int j = 3; j < pargc; j++) {
+				for(int j = start + 2; j < pargc; j++) {
 					args[i] = pargv[j];
 					i++;
 				}
