@@ -11,3 +11,4 @@ tests:
 clean:
 	rm -f change simple *.o
 	make -C tests clean
+	make -C preload clean
